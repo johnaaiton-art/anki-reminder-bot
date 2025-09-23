@@ -69,13 +69,13 @@ class AnkiReminderBot:
             "Even 5 minutes of Anki is better than none! ⚡"
         ]
 
-        # Image paths (create these directories and add your images)
+        # Image paths (add your images to the root folder)
         self.image_paths = [
-            "./images/vasilina_anki_1.png",
-            "./images/vasilina_anki_2.png",
-            "./images/vasilina_anki_3.png",
-            "./images/vasilina_anki_4.png",
-            "./images/vasilina_anki_5.png"
+            "./vasilina_anki_1.png",
+            "./vasilina_anki_2.png",
+            "./vasilina_anki_3.png",
+            "./vasilina_anki_4.png",
+            "./vasilina_anki_5.png"
         ]
 
     async def setup_application(self):
