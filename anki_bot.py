@@ -232,8 +232,13 @@ class AnkiReminderBot:
             # Send test message on startup
             await self.test_reminder()
             
-            # Keep the bot running
-            await self.application.updater.start_polling()
+            # Keep the bot running - improved compatibility
+            try:
+                await self.application.run_polling()
+            except AttributeError:
+                # Fallback for older versions
+                await self.application.updater.start_polling()
+                await self.application.updater.idle()
             
         except Exception as e:
             logger.error(f"Error starting bot: {e}")
