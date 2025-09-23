@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Self-Hosted Anki Reminder Bot
-Runs continuously and sends scheduled reminders
+Simple Anki Reminder Bot - Railway Compatible
+Sends scheduled reminders without complex polling
 """
 
 import asyncio
@@ -13,8 +13,7 @@ import sys
 from datetime import datetime
 from typing import List
 import pytz
-from telegram import Bot, Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -29,14 +28,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class AnkiReminderBot:
+class SimpleAnkiBot:
     def __init__(self):
-        # Configuration - Set these as environment variables for security
+        # Configuration
         self.token = os.getenv('TELEGRAM_TOKEN', '7660365913:AAGSKYO3rzJ62USF-ppU2XZwZW9aKIX714Y')
         self.chat_id = int(os.getenv('CHAT_ID', '-1002452488546'))
         
         self.bot = Bot(token=self.token)
-        self.application = None
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.moscow_tz = pytz.timezone('Europe/Moscow')
         
@@ -45,7 +43,7 @@ class AnkiReminderBot:
         self.response_received = False
         self.last_reminder_date = None
         
-        # Motivational messages
+        # Messages
         self.reminder_messages = [
             "Time for your Anki flashcards! 📚✨",
             "Hey! Don't forget your daily Anki practice! 🧠💪",
@@ -69,7 +67,7 @@ class AnkiReminderBot:
             "Even 5 minutes of Anki is better than none! ⚡"
         ]
 
-        # Image paths (add your images to the root folder)
+        # Image paths
         self.image_paths = [
             "./vasilina_anki_1.png",
             "./vasilina_anki_2.png",
@@ -78,39 +76,12 @@ class AnkiReminderBot:
             "./vasilina_anki_5.png"
         ]
 
-    async def setup_application(self):
-        """Setup the Telegram application"""
-        self.application = Application.builder().token(self.token).build()
-        
-        # Add message handler for images
-        image_handler = MessageHandler(filters.PHOTO, self.handle_image_message)
-        self.application.add_handler(image_handler)
-        
-        # Initialize the application
-        await self.application.initialize()
-        await self.application.start()
-        
-        logger.info("Telegram bot application setup complete")
-
-    async def handle_image_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle incoming image messages"""
-        if update.effective_chat.id == self.chat_id and self.waiting_for_response:
-            self.response_received = True
-            self.waiting_for_response = False
-            
-            # Send confirmation message
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text="Great job! ✅ Anki session completed! Keep up the excellent work! 🎉"
-            )
-            logger.info("Anki completion confirmed via image")
-
     def get_available_images(self) -> List[str]:
         """Get list of available images"""
         return [img for img in self.image_paths if os.path.exists(img)]
 
-    async def send_reminder_with_image(self, message: str, image_path: str = None):
-        """Send reminder message with optional image"""
+    async def send_message_with_image(self, message: str, image_path: str = None):
+        """Send message with optional image"""
         try:
             if image_path and os.path.exists(image_path):
                 with open(image_path, 'rb') as photo:
@@ -119,16 +90,16 @@ class AnkiReminderBot:
                         photo=photo,
                         caption=message
                     )
-                logger.info(f"Reminder sent with image: {os.path.basename(image_path)}")
+                logger.info(f"Message sent with image: {os.path.basename(image_path)}")
             else:
                 await self.bot.send_message(
                     chat_id=self.chat_id,
                     text=message
                 )
-                logger.info("Reminder sent (text only)")
+                logger.info("Message sent (text only)")
                 
         except Exception as e:
-            logger.error(f"Error sending reminder: {e}")
+            logger.error(f"Error sending message: {e}")
 
     def get_moscow_time(self) -> datetime:
         """Get current Moscow time"""
@@ -151,17 +122,17 @@ class AnkiReminderBot:
         available_images = self.get_available_images()
         image_path = random.choice(available_images) if available_images else None
         
-        await self.send_reminder_with_image(message, image_path)
+        await self.send_message_with_image(message, image_path)
         logger.info(f"Daily reminder sent at {self.get_moscow_time()}")
 
     async def send_followup_reminder(self):
-        """Send the 20:30 follow-up reminder if no response received"""
+        """Send the 20:30 follow-up reminder"""
         if self.waiting_for_response and not self.response_received:
             message = random.choice(self.followup_messages)
             available_images = self.get_available_images()
             image_path = random.choice(available_images) if available_images else None
             
-            await self.send_reminder_with_image(message, image_path)
+            await self.send_message_with_image(message, image_path)
             logger.info(f"Follow-up reminder sent at {self.get_moscow_time()}")
         else:
             logger.info("Follow-up reminder not needed - response already received")
@@ -205,19 +176,17 @@ class AnkiReminderBot:
         message = "🧪 Test reminder: " + random.choice(self.reminder_messages)
         available_images = self.get_available_images()
         image_path = random.choice(available_images) if available_images else None
-        await self.send_reminder_with_image(message, image_path)
+        await self.send_message_with_image(message, image_path)
         logger.info("Test reminder sent")
 
     async def start_bot(self):
         """Start the bot and scheduler"""
-        logger.info("Starting Anki Reminder Bot...")
+        logger.info("🤖 Starting Simple Anki Reminder Bot...")
         
         try:
             # Test bot connection
             me = await self.bot.get_me()
-            logger.info(f"Connected as: {me.username}")
-            
-            await self.setup_application()
+            logger.info(f"✅ Connected as: {me.username}")
             
             # Setup and start scheduler
             self.setup_scheduler()
@@ -229,33 +198,32 @@ class AnkiReminderBot:
             logger.info(f"💬 Sending to chat ID: {self.chat_id}")
             logger.info(f"🕐 Current Moscow time: {self.get_moscow_time()}")
             
+            # Check for images
+            available_images = self.get_available_images()
+            if available_images:
+                logger.info(f"📸 Found {len(available_images)} images")
+            else:
+                logger.info("📸 No images found - will send text-only messages")
+            
             # Send test message on startup
             await self.test_reminder()
             
-            # Keep the bot running - improved compatibility
-            try:
-                await self.application.run_polling()
-            except AttributeError:
-                # Fallback for older versions
-                await self.application.updater.start_polling()
-                await self.application.updater.idle()
-            
+            # Keep the bot running with simple loop
+            logger.info("🔄 Bot is now running continuously...")
+            while True:
+                await asyncio.sleep(60)  # Check every minute
+                
         except Exception as e:
-            logger.error(f"Error starting bot: {e}")
+            logger.error(f"❌ Error starting bot: {e}")
             raise
 
     async def stop_bot(self):
         """Stop the bot gracefully"""
-        logger.info("Stopping Anki Reminder Bot...")
+        logger.info("🛑 Stopping Anki Reminder Bot...")
         
         if self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Scheduler stopped")
-        
-        if self.application:
-            await self.application.stop()
-            await self.application.shutdown()
-            logger.info("Telegram application stopped")
         
         logger.info("Bot stopped gracefully")
 
@@ -273,18 +241,15 @@ async def main():
     """Main function"""
     global bot_instance
     
-    print("🤖 Anki Reminder Bot - Self-Hosted Version")
+    print("🤖 Simple Anki Reminder Bot - Railway Compatible")
     print("=" * 50)
     
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Create images directory if it doesn't exist
-    os.makedirs('./images', exist_ok=True)
-    
     try:
-        bot_instance = AnkiReminderBot()
+        bot_instance = SimpleAnkiBot()
         await bot_instance.start_bot()
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
@@ -295,7 +260,6 @@ async def main():
             await bot_instance.stop_bot()
 
 if __name__ == "__main__":
-    # Create a new event loop to avoid conflicts
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
