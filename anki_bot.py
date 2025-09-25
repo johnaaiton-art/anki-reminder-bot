@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Simple Anki Reminder Bot - Railway Compatible
-Sends scheduled reminders without complex polling
+Sends scheduled reminders and monitors for student responses
 """
 
 import asyncio
@@ -10,10 +10,11 @@ import os
 import random
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, time
 from typing import List
 import pytz
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import Application, MessageHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -35,6 +36,7 @@ class SimpleAnkiBot:
         self.chat_id = int(os.getenv('CHAT_ID', '-1002452488546'))
         
         self.bot = Bot(token=self.token)
+        self.application = None
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.moscow_tz = pytz.timezone('Europe/Moscow')
         
@@ -42,6 +44,7 @@ class SimpleAnkiBot:
         self.waiting_for_response = False
         self.response_received = False
         self.last_reminder_date = None
+        self.image_received_today = False
         
         # Messages
         self.reminder_messages = [
@@ -65,6 +68,19 @@ class SimpleAnkiBot:
             "Don't let the day end without your Anki practice! 🌙",
             "Last chance to complete your daily Anki goal! 🎯",
             "Even 5 minutes of Anki is better than none! ⚡"
+        ]
+        
+        self.congratulation_messages = [
+            "🎉 Excellent work! Your dedication to Anki is paying off! 🌟",
+            "👏 Amazing job! Another day, another step towards mastery! 💪",
+            "🔥 Fantastic! Your consistency is inspiring! Keep it up! 🚀",
+            "⭐ Well done! Your brain is getting stronger every day! 🧠💪",
+            "🎯 Perfect! You're building such a great habit! 👍",
+            "💎 Outstanding! Your future self is already thanking you! 🙏",
+            "🌟 Brilliant work! Knowledge is your superpower! ⚡",
+            "🎊 Awesome! Another successful Anki session completed! 📚✨",
+            "👑 Champion! Your dedication to learning is admirable! 🏆",
+            "🔥 Incredible! You're on fire with your Anki practice! 🚀"
         ]
 
         # Image paths
@@ -105,6 +121,38 @@ class SimpleAnkiBot:
         """Get current Moscow time"""
         return datetime.now(self.moscow_tz)
 
+    def is_anki_time_window(self) -> bool:
+        """Check if we're in the Anki practice time window (after 16:00)"""
+        current_time = self.get_moscow_time().time()
+        return current_time >= time(16, 0)  # After 4 PM
+
+    async def handle_image_message(self, update: Update, context):
+        """Handle incoming image messages"""
+        try:
+            # Only process messages from the target chat
+            if update.effective_chat.id != self.chat_id:
+                return
+            
+            # Check if message contains a photo
+            if update.message.photo:
+                current_time = self.get_moscow_time()
+                logger.info(f"Image received at {current_time}")
+                
+                # Mark that we received an image today
+                self.image_received_today = True
+                self.response_received = True
+                
+                # Send congratulation message
+                congratulation = random.choice(self.congratulation_messages)
+                available_images = self.get_available_images()
+                image_path = random.choice(available_images) if available_images else None
+                
+                await self.send_message_with_image(congratulation, image_path)
+                logger.info("Congratulation message sent for Anki completion")
+                
+        except Exception as e:
+            logger.error(f"Error handling image message: {e}")
+
     async def send_daily_reminder(self):
         """Send the daily 16:00 reminder"""
         current_date = self.get_moscow_time().date()
@@ -112,6 +160,11 @@ class SimpleAnkiBot:
         # Check if we already sent reminder today
         if self.last_reminder_date == current_date:
             logger.info("Daily reminder already sent today")
+            return
+        
+        # Check if student already sent image before reminder time
+        if self.image_received_today:
+            logger.info("Student already completed Anki today - skipping reminder")
             return
             
         self.last_reminder_date = current_date
@@ -127,7 +180,8 @@ class SimpleAnkiBot:
 
     async def send_followup_reminder(self):
         """Send the 20:30 follow-up reminder"""
-        if self.waiting_for_response and not self.response_received:
+        # Only send if we're waiting for response and haven't received one
+        if self.waiting_for_response and not self.response_received and not self.image_received_today:
             message = random.choice(self.followup_messages)
             available_images = self.get_available_images()
             image_path = random.choice(available_images) if available_images else None
@@ -141,6 +195,8 @@ class SimpleAnkiBot:
         """Reset daily flags at midnight"""
         self.waiting_for_response = False
         self.response_received = False
+        self.image_received_today = False
+        self.last_reminder_date = None
         logger.info("Daily flags reset at midnight")
 
     def setup_scheduler(self):
@@ -181,9 +237,16 @@ class SimpleAnkiBot:
 
     async def start_bot(self):
         """Start the bot and scheduler"""
-        logger.info("🤖 Starting Simple Anki Reminder Bot...")
+        logger.info("🤖 Starting Simple Anki Reminder Bot with Image Monitoring...")
         
         try:
+            # Create application
+            self.application = Application.builder().token(self.token).build()
+            
+            # Add message handler for images
+            image_handler = MessageHandler(filters.PHOTO, self.handle_image_message)
+            self.application.add_handler(image_handler)
+            
             # Test bot connection
             me = await self.bot.get_me()
             logger.info(f"✅ Connected as: {me.username}")
@@ -195,7 +258,7 @@ class SimpleAnkiBot:
             logger.info("✅ Anki Reminder Bot started successfully!")
             logger.info(f"📅 Daily reminders: 16:00 Moscow time")
             logger.info(f"📅 Follow-up reminders: 20:30 Moscow time")
-            logger.info(f"💬 Sending to chat ID: {self.chat_id}")
+            logger.info(f"💬 Monitoring chat ID: {self.chat_id}")
             logger.info(f"🕐 Current Moscow time: {self.get_moscow_time()}")
             
             # Check for images
@@ -205,13 +268,21 @@ class SimpleAnkiBot:
             else:
                 logger.info("📸 No images found - will send text-only messages")
             
+            # Start polling for messages
+            logger.info("👀 Starting to monitor for student images...")
+            await self.application.initialize()
+            await self.application.start()
+            
             # Send test message on startup
             await self.test_reminder()
             
-            # Keep the bot running with simple loop
-            logger.info("🔄 Bot is now running continuously...")
+            # Keep the bot running and polling for updates
+            logger.info("🔄 Bot is now running and monitoring messages...")
+            await self.application.updater.start_polling()
+            
+            # Keep alive
             while True:
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(60)
                 
         except Exception as e:
             logger.error(f"❌ Error starting bot: {e}")
@@ -224,6 +295,12 @@ class SimpleAnkiBot:
         if self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Scheduler stopped")
+        
+        if self.application:
+            await self.application.updater.stop()
+            await self.application.stop()
+            await self.application.shutdown()
+            logger.info("Telegram application stopped")
         
         logger.info("Bot stopped gracefully")
 
@@ -241,8 +318,8 @@ async def main():
     """Main function"""
     global bot_instance
     
-    print("🤖 Simple Anki Reminder Bot - Railway Compatible")
-    print("=" * 50)
+    print("🤖 Simple Anki Reminder Bot - Railway Compatible with Image Monitoring")
+    print("=" * 65)
     
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
