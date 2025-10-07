@@ -31,20 +31,30 @@ logger = logging.getLogger(__name__)
 
 class SimpleAnkiBot:
     def __init__(self):
-        # Configuration
-        self.token = os.getenv('TELEGRAM_TOKEN', '7660365913:AAGSKYO3rzJ62USF-ppU2XZwZW9aKIX714Y')
-        self.chat_id = int(os.getenv('CHAT_ID', '-1002452488546'))
+        # Configuration - Get from environment variables
+        self.token = os.getenv('TELEGRAM_TOKEN')
+        chat_id_str = os.getenv('CHAT_ID')
+        
+        # Validate required environment variables
+        if not self.token:
+            raise ValueError("TELEGRAM_TOKEN environment variable is required")
+        if not chat_id_str:
+            raise ValueError("CHAT_ID environment variable is required")
+        
+        try:
+            self.chat_id = int(chat_id_str)
+        except ValueError:
+            raise ValueError("CHAT_ID must be a valid integer")
         
         self.bot = Bot(token=self.token)
         self.application = None
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.moscow_tz = pytz.timezone('Europe/Moscow')
         
-        # Daily tracking
-        self.waiting_for_response = False
-        self.response_received = False
-        self.last_reminder_date = None
-        self.image_received_today = False
+        # Daily tracking - FIXED: Use date tracking instead of boolean
+        self.completed_date = None  # Track which date the task was completed
+        self.reminder_sent_date = None  # Track which date we sent the main reminder
+        self.followup_sent_date = None  # Track which date we sent the follow-up
         
         # Messages
         self.reminder_messages = [
@@ -121,10 +131,10 @@ class SimpleAnkiBot:
         """Get current Moscow time"""
         return datetime.now(self.moscow_tz)
 
-    def is_anki_time_window(self) -> bool:
-        """Check if we're in the Anki practice time window (after 16:00)"""
-        current_time = self.get_moscow_time().time()
-        return current_time >= time(16, 0)  # After 4 PM
+    def is_completed_today(self) -> bool:
+        """Check if task was completed today"""
+        current_date = self.get_moscow_time().date()
+        return self.completed_date == current_date
 
     async def handle_image_message(self, update: Update, context):
         """Handle incoming image messages"""
@@ -136,11 +146,17 @@ class SimpleAnkiBot:
             # Check if message contains a photo
             if update.message.photo:
                 current_time = self.get_moscow_time()
+                current_date = current_time.date()
+                
                 logger.info(f"Image received at {current_time}")
                 
-                # Mark that we received an image today
-                self.image_received_today = True
-                self.response_received = True
+                # Check if already completed today
+                if self.completed_date == current_date:
+                    logger.info("Task already completed today - ignoring duplicate")
+                    return
+                
+                # Mark task as completed for today
+                self.completed_date = current_date
                 
                 # Send congratulation message
                 congratulation = random.choice(self.congratulation_messages)
@@ -148,7 +164,7 @@ class SimpleAnkiBot:
                 image_path = random.choice(available_images) if available_images else None
                 
                 await self.send_message_with_image(congratulation, image_path)
-                logger.info("Congratulation message sent for Anki completion")
+                logger.info(f"Task completed for {current_date} - Congratulation sent")
                 
         except Exception as e:
             logger.error(f"Error handling image message: {e}")
@@ -157,19 +173,18 @@ class SimpleAnkiBot:
         """Send the daily 16:00 reminder"""
         current_date = self.get_moscow_time().date()
         
+        # Check if task already completed today
+        if self.is_completed_today():
+            logger.info(f"Task already completed for {current_date} - skipping 16:00 reminder")
+            return
+        
         # Check if we already sent reminder today
-        if self.last_reminder_date == current_date:
+        if self.reminder_sent_date == current_date:
             logger.info("Daily reminder already sent today")
             return
         
-        # Check if student already sent image before reminder time
-        if self.image_received_today:
-            logger.info("Student already completed Anki today - skipping reminder")
-            return
-            
-        self.last_reminder_date = current_date
-        self.waiting_for_response = True
-        self.response_received = False
+        # Mark that we sent the reminder
+        self.reminder_sent_date = current_date
         
         message = random.choice(self.reminder_messages)
         available_images = self.get_available_images()
@@ -180,24 +195,32 @@ class SimpleAnkiBot:
 
     async def send_followup_reminder(self):
         """Send the 20:30 follow-up reminder"""
-        # Only send if we're waiting for response and haven't received one
-        if self.waiting_for_response and not self.response_received and not self.image_received_today:
-            message = random.choice(self.followup_messages)
-            available_images = self.get_available_images()
-            image_path = random.choice(available_images) if available_images else None
-            
-            await self.send_message_with_image(message, image_path)
-            logger.info(f"Follow-up reminder sent at {self.get_moscow_time()}")
-        else:
-            logger.info("Follow-up reminder not needed - response already received")
+        current_date = self.get_moscow_time().date()
+        
+        # Only send if task not completed and we haven't sent follow-up today
+        if self.is_completed_today():
+            logger.info(f"Task already completed for {current_date} - skipping 20:30 follow-up")
+            return
+        
+        if self.followup_sent_date == current_date:
+            logger.info("Follow-up reminder already sent today")
+            return
+        
+        # Mark that we sent the follow-up
+        self.followup_sent_date = current_date
+        
+        message = random.choice(self.followup_messages)
+        available_images = self.get_available_images()
+        image_path = random.choice(available_images) if available_images else None
+        
+        await self.send_message_with_image(message, image_path)
+        logger.info(f"Follow-up reminder sent at {self.get_moscow_time()}")
 
     async def reset_daily_flags(self):
         """Reset daily flags at midnight"""
-        self.waiting_for_response = False
-        self.response_received = False
-        self.image_received_today = False
-        self.last_reminder_date = None
-        logger.info("Daily flags reset at midnight")
+        # We don't reset completed_date, reminder_sent_date, or followup_sent_date
+        # because they use date comparison which automatically handles day changes
+        logger.info("Daily reset triggered at midnight (date-based tracking continues)")
 
     def setup_scheduler(self):
         """Setup the scheduler with cron jobs"""
@@ -217,7 +240,7 @@ class SimpleAnkiBot:
             replace_existing=True
         )
         
-        # Reset flags at midnight Moscow time
+        # Midnight check (optional - mainly for logging)
         self.scheduler.add_job(
             self.reset_daily_flags,
             CronTrigger(hour=0, minute=0, timezone=self.moscow_tz),
