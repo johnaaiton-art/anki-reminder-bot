@@ -5,6 +5,7 @@ Sends scheduled reminders and monitors for student responses
 """
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -51,10 +52,8 @@ class SimpleAnkiBot:
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.moscow_tz = pytz.timezone('Europe/Moscow')
         
-        # Daily tracking - FIXED: Use date tracking instead of boolean
-        self.completed_date = None  # Track which date the task was completed
-        self.reminder_sent_date = None  # Track which date we sent the main reminder
-        self.followup_sent_date = None  # Track which date we sent the follow-up
+        # Persistent storage for completion status
+        self.status_file = 'completion_status.json'
         
         # Messages
         self.reminder_messages = [
@@ -102,6 +101,33 @@ class SimpleAnkiBot:
             "./vasilina_anki_5.png"
         ]
 
+    def load_completion_status(self):
+        """Load completion status from file"""
+        try:
+            with open(self.status_file, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def save_completion_status(self, status):
+        """Save completion status to file"""
+        with open(self.status_file, 'w') as f:
+            json.dump(status, f)
+
+    def is_completed_today(self) -> bool:
+        """Check if task was completed today using persistent storage"""
+        current_date = self.get_moscow_time().date().isoformat()
+        status = self.load_completion_status()
+        return status.get(current_date, False)
+
+    def mark_completed_today(self):
+        """Mark today as completed in persistent storage"""
+        current_date = self.get_moscow_time().date().isoformat()
+        status = self.load_completion_status()
+        status[current_date] = True
+        self.save_completion_status(status)
+        logger.info(f"✅ Marked {current_date} as completed in persistent storage")
+
     def get_available_images(self) -> List[str]:
         """Get list of available images"""
         return [img for img in self.image_paths if os.path.exists(img)]
@@ -131,96 +157,85 @@ class SimpleAnkiBot:
         """Get current Moscow time"""
         return datetime.now(self.moscow_tz)
 
-    def is_completed_today(self) -> bool:
-        """Check if task was completed today"""
-        current_date = self.get_moscow_time().date()
-        return self.completed_date == current_date
-
     async def handle_image_message(self, update: Update, context):
         """Handle incoming image messages"""
         try:
             # Only process messages from the target chat
             if update.effective_chat.id != self.chat_id:
+                logger.info(f"❌ Message from wrong chat: {update.effective_chat.id}")
                 return
             
             # Check if message contains a photo
-            if update.message.photo:
-                current_time = self.get_moscow_time()
-                current_date = current_time.date()
+            if not update.message.photo:
+                logger.info("❌ Message doesn't contain photo")
+                return
                 
-                logger.info(f"Image received at {current_time}")
-                
-                # Check if already completed today
-                if self.completed_date == current_date:
-                    logger.info("Task already completed today - ignoring duplicate")
-                    return
-                
-                # Mark task as completed for today
-                self.completed_date = current_date
-                
-                # Send congratulation message
-                congratulation = random.choice(self.congratulation_messages)
-                available_images = self.get_available_images()
-                image_path = random.choice(available_images) if available_images else None
-                
-                await self.send_message_with_image(congratulation, image_path)
-                logger.info(f"Task completed for {current_date} - Congratulation sent")
-                
+            current_time = self.get_moscow_time()
+            current_date = current_time.date()
+            
+            logger.info(f"📸 Image received at {current_time}")
+            
+            # Check if already completed today using persistent storage
+            if self.is_completed_today():
+                logger.info("✅ Task already completed today - ignoring duplicate")
+                return
+            
+            # Mark task as completed for today in persistent storage
+            self.mark_completed_today()
+            logger.info(f"✅ Marked {current_date} as completed")
+            
+            # Send congratulation message
+            congratulation = random.choice(self.congratulation_messages)
+            available_images = self.get_available_images()
+            image_path = random.choice(available_images) if available_images else None
+            
+            await self.send_message_with_image(congratulation, image_path)
+            logger.info(f"🎉 Congratulation sent for {current_date}")
+            
         except Exception as e:
-            logger.error(f"Error handling image message: {e}")
+            logger.error(f"❌ Error handling image message: {e}", exc_info=True)
 
     async def send_daily_reminder(self):
         """Send the daily 16:00 reminder"""
         current_date = self.get_moscow_time().date()
         
-        # Check if task already completed today
+        logger.info(f"🔔 Daily reminder check for {current_date}")
+        logger.info(f"📊 Status - is_completed_today(): {self.is_completed_today()}")
+        
+        # Check if task already completed today using persistent storage
         if self.is_completed_today():
-            logger.info(f"Task already completed for {current_date} - skipping 16:00 reminder")
+            logger.info(f"✅ Task already completed for {current_date} - skipping 16:00 reminder")
             return
-        
-        # Check if we already sent reminder today
-        if self.reminder_sent_date == current_date:
-            logger.info("Daily reminder already sent today")
-            return
-        
-        # Mark that we sent the reminder
-        self.reminder_sent_date = current_date
         
         message = random.choice(self.reminder_messages)
         available_images = self.get_available_images()
         image_path = random.choice(available_images) if available_images else None
         
         await self.send_message_with_image(message, image_path)
-        logger.info(f"Daily reminder sent at {self.get_moscow_time()}")
+        logger.info(f"📅 Daily reminder sent at {self.get_moscow_time()}")
 
     async def send_followup_reminder(self):
         """Send the 20:30 follow-up reminder"""
         current_date = self.get_moscow_time().date()
         
-        # Only send if task not completed and we haven't sent follow-up today
+        logger.info(f"🔔 Follow-up reminder check for {current_date}")
+        logger.info(f"📊 Status - is_completed_today(): {self.is_completed_today()}")
+        
+        # Check if task already completed today using persistent storage
         if self.is_completed_today():
-            logger.info(f"Task already completed for {current_date} - skipping 20:30 follow-up")
+            logger.info(f"✅ Task already completed for {current_date} - skipping 20:30 follow-up")
             return
-        
-        if self.followup_sent_date == current_date:
-            logger.info("Follow-up reminder already sent today")
-            return
-        
-        # Mark that we sent the follow-up
-        self.followup_sent_date = current_date
         
         message = random.choice(self.followup_messages)
         available_images = self.get_available_images()
         image_path = random.choice(available_images) if available_images else None
         
         await self.send_message_with_image(message, image_path)
-        logger.info(f"Follow-up reminder sent at {self.get_moscow_time()}")
+        logger.info(f"📅 Follow-up reminder sent at {self.get_moscow_time()}")
 
     async def reset_daily_flags(self):
-        """Reset daily flags at midnight"""
-        # We don't reset completed_date, reminder_sent_date, or followup_sent_date
-        # because they use date comparison which automatically handles day changes
-        logger.info("Daily reset triggered at midnight (date-based tracking continues)")
+        """Reset daily flags at midnight - now handled by date comparison"""
+        logger.info("🕛 Midnight reset - persistent storage continues to work")
 
     def setup_scheduler(self):
         """Setup the scheduler with cron jobs"""
@@ -290,6 +305,10 @@ class SimpleAnkiBot:
                 logger.info(f"📸 Found {len(available_images)} images")
             else:
                 logger.info("📸 No images found - will send text-only messages")
+            
+            # Check persistent storage status
+            status = self.load_completion_status()
+            logger.info(f"💾 Persistent storage status: {len(status)} days recorded")
             
             # Start polling for messages
             logger.info("👀 Starting to monitor for student images...")
