@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple Anki Reminder Bot - Railway Compatible
-Sends scheduled reminders and monitors for student responses
+Simple Anki & Article Reminder Bot - Railway Compatible
+Sends scheduled reminders for Anki practice and article homework
 """
 
 import asyncio
@@ -55,7 +55,13 @@ class SimpleAnkiBot:
         # Persistent storage for completion status
         self.status_file = 'completion_status.json'
         
-        # Messages
+        # ====== ARTICLE HOMEWORK LINK ======
+        # Can be set via Railway environment variable ARTICLE_LINK
+        # Or update the default here each Saturday
+        self.article_link = os.getenv('ARTICLE_LINK', "https://example.com/article")
+        # ===================================
+        
+        # Anki reminder messages
         self.reminder_messages = [
             "Time for your Anki flashcards! 📚✨",
             "Hey! Don't forget your daily Anki practice! 🧠💪",
@@ -91,6 +97,30 @@ class SimpleAnkiBot:
             "👑 Champion! Your dedication to learning is admirable! 🏆",
             "🔥 Incredible! You're on fire with your Anki practice! 🚀"
         ]
+        
+        # Article homework reminder messages (20 advanced CEFR variations)
+        self.article_messages = [
+            "📖 It's time to get the ball rolling and hit the article for homework! 🚀",
+            "📚 Don't put it off any longer—roll up your sleeves, get down to work, and tackle that article! 💪",
+            "🎯 Time to buckle down and dive into today's reading assignment! 📰",
+            "✨ Don't let this slip through the cracks—seize the moment and delve into that article! 🔍",
+            "🧠 No more dragging your feet! It's time to knuckle down and absorb that content! 📖",
+            "⚡ Strike while the iron is hot—jump into your article and broaden your horizons! 🌍",
+            "📝 Don't beat around the bush—cut to the chase and immerse yourself in the reading! 🎓",
+            "🎪 Time to step up to the plate and devour that article with enthusiasm! 📚",
+            "🔥 No time like the present to crack on with your homework and expand your knowledge! 💡",
+            "🌟 Let's get cracking! Plunge into the article and sharpen those critical thinking skills! 🧐",
+            "💼 Time to pull your socks up and digest the insights from today's assigned reading! 📖",
+            "🚀 Don't drag your heels—launch yourself into the article and reap the rewards! 🏆",
+            "📚 Bite the bullet and tackle that reading head-on—your future self will thank you! 🙏",
+            "🎯 Time to hit the ground running and absorb every nugget of wisdom in that piece! 💎",
+            "⏰ The clock's ticking! Seize the day and engross yourself in the article! 📰",
+            "🌈 Don't dilly-dally—embark on your reading journey and unlock new perspectives! 🗝️",
+            "💪 Time to buckle down and grapple with the complexities of today's article! 🧠",
+            "📖 Don't let this slide—sink your teeth into the material and extract maximum value! 🍊",
+            "🎓 No more procrastinating! Zero in on the article and elevate your understanding! ⬆️",
+            "✨ Time to press on and scrutinize the article with fresh eyes and an open mind! 👀"
+        ]
 
         # Image paths
         self.image_paths = [
@@ -100,19 +130,26 @@ class SimpleAnkiBot:
             "./vasilina_anki_4.png",
             "./vasilina_anki_5.png"
         ]
+        
+        # Track which article message was last used
+        self.article_message_index = 0
 
     def load_completion_status(self):
-        """Load completion status from file"""
+        """Load completion status from file - with better error handling"""
         try:
             with open(self.status_file, 'r') as f:
                 return json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning(f"Could not load status file ({e}), starting fresh")
             return {}
 
     def save_completion_status(self, status):
-        """Save completion status to file"""
-        with open(self.status_file, 'w') as f:
-            json.dump(status, f)
+        """Save completion status to file - with error handling"""
+        try:
+            with open(self.status_file, 'w') as f:
+                json.dump(status, f)
+        except Exception as e:
+            logger.error(f"Failed to save status: {e}")
 
     def is_completed_today(self) -> bool:
         """Check if task was completed today using persistent storage"""
@@ -133,7 +170,7 @@ class SimpleAnkiBot:
         return [img for img in self.image_paths if os.path.exists(img)]
 
     async def send_message_with_image(self, message: str, image_path: str = None):
-        """Send message with optional image"""
+        """Send message with optional image - with fallback"""
         try:
             if image_path and os.path.exists(image_path):
                 with open(image_path, 'rb') as photo:
@@ -144,14 +181,29 @@ class SimpleAnkiBot:
                     )
                 logger.info(f"Message sent with image: {os.path.basename(image_path)}")
             else:
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=message
-                )
-                logger.info("Message sent (text only)")
+                # FALLBACK: Send text only if image missing
+                await self.bot.send_message(chat_id=self.chat_id, text=message)
+                logger.info("Message sent (text only - image not available)")
                 
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error(f"Error sending message with image: {e}")
+            # FALLBACK: Try text only
+            try:
+                await self.bot.send_message(chat_id=self.chat_id, text=message)
+                logger.info("Message sent as text after image failure")
+            except Exception as e2:
+                logger.error(f"Complete failure sending message: {e2}")
+
+    async def send_text_message(self, message: str):
+        """Send a text-only message"""
+        try:
+            await self.bot.send_message(
+                chat_id=self.chat_id,
+                text=message
+            )
+            logger.info("Text message sent")
+        except Exception as e:
+            logger.error(f"Error sending text message: {e}")
 
     def get_moscow_time(self) -> datetime:
         """Get current Moscow time"""
@@ -233,13 +285,30 @@ class SimpleAnkiBot:
         await self.send_message_with_image(message, image_path)
         logger.info(f"📅 Follow-up reminder sent at {self.get_moscow_time()}")
 
+    async def send_article_reminder(self):
+        """Send the article homework reminder (Sunday & Thursday at 18:00)"""
+        logger.info(f"📰 Article reminder triggered at {self.get_moscow_time()}")
+        
+        # Get the next message in rotation
+        message = self.article_messages[self.article_message_index]
+        self.article_message_index = (self.article_message_index + 1) % len(self.article_messages)
+        
+        # Send motivational message first
+        await self.send_text_message(message)
+        logger.info("📝 Article reminder message sent")
+        
+        # Wait a moment, then send the link
+        await asyncio.sleep(1)
+        await self.send_text_message(self.article_link)
+        logger.info(f"🔗 Article link sent: {self.article_link}")
+
     async def reset_daily_flags(self):
         """Reset daily flags at midnight - now handled by date comparison"""
         logger.info("🕛 Midnight reset - persistent storage continues to work")
 
     def setup_scheduler(self):
         """Setup the scheduler with cron jobs"""
-        # Daily reminder at 16:00 Moscow time
+        # Daily Anki reminder at 16:00 Moscow time
         self.scheduler.add_job(
             self.send_daily_reminder,
             CronTrigger(hour=16, minute=0, timezone=self.moscow_tz),
@@ -247,11 +316,27 @@ class SimpleAnkiBot:
             replace_existing=True
         )
         
-        # Follow-up reminder at 20:30 Moscow time
+        # Follow-up Anki reminder at 20:30 Moscow time
         self.scheduler.add_job(
             self.send_followup_reminder,
             CronTrigger(hour=20, minute=30, timezone=self.moscow_tz),
             id='followup_reminder',
+            replace_existing=True
+        )
+        
+        # Article reminder on Sunday at 18:00 Moscow time
+        self.scheduler.add_job(
+            self.send_article_reminder,
+            CronTrigger(day_of_week='sun', hour=18, minute=0, timezone=self.moscow_tz),
+            id='article_reminder_sunday',
+            replace_existing=True
+        )
+        
+        # Article reminder on Thursday at 18:00 Moscow time
+        self.scheduler.add_job(
+            self.send_article_reminder,
+            CronTrigger(day_of_week='thu', hour=18, minute=0, timezone=self.moscow_tz),
+            id='article_reminder_thursday',
             replace_existing=True
         )
         
@@ -275,7 +360,7 @@ class SimpleAnkiBot:
 
     async def start_bot(self):
         """Start the bot and scheduler"""
-        logger.info("🤖 Starting Simple Anki Reminder Bot with Image Monitoring...")
+        logger.info("🤖 Starting Anki & Article Reminder Bot...")
         
         try:
             # Create application
@@ -293,11 +378,12 @@ class SimpleAnkiBot:
             self.setup_scheduler()
             self.scheduler.start()
             
-            logger.info("✅ Anki Reminder Bot started successfully!")
-            logger.info(f"📅 Daily reminders: 16:00 Moscow time")
-            logger.info(f"📅 Follow-up reminders: 20:30 Moscow time")
+            logger.info("✅ Bot started successfully!")
+            logger.info(f"📅 Anki reminders: 16:00 & 20:30 Moscow time")
+            logger.info(f"📰 Article reminders: Sunday & Thursday 18:00 Moscow time")
             logger.info(f"💬 Monitoring chat ID: {self.chat_id}")
             logger.info(f"🕐 Current Moscow time: {self.get_moscow_time()}")
+            logger.info(f"🔗 Current article link: {self.article_link}")
             
             # Check for images
             available_images = self.get_available_images()
@@ -332,7 +418,7 @@ class SimpleAnkiBot:
 
     async def stop_bot(self):
         """Stop the bot gracefully"""
-        logger.info("🛑 Stopping Anki Reminder Bot...")
+        logger.info("🛑 Stopping Bot...")
         
         if self.scheduler.running:
             self.scheduler.shutdown()
@@ -360,8 +446,8 @@ async def main():
     """Main function"""
     global bot_instance
     
-    print("🤖 Simple Anki Reminder Bot - Railway Compatible with Image Monitoring")
-    print("=" * 65)
+    print("🤖 Anki & Article Reminder Bot - Railway Compatible")
+    print("=" * 55)
     
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
